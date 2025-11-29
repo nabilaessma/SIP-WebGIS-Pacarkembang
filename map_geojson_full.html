@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebGIS - Persil, Jalan Lokal, dan Sungai</title>
+
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link 
+        rel="stylesheet" 
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"
+    />
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background: linear-gradient(135deg, #061d4c 0%, #061d4c 100%); /* Warna Teal/Turquoise */
+            color: white;
+            text-align: center;
+            padding: 15px 0;
+            font-size: 20px;
+            font-weight: bold;
+            z-index: 1000;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+        }
+        #map {
+            width: 100%;
+            height: calc(100vh - 50px); /* Sesuaikan tinggi peta dengan header */
+            margin-top: 50px;
+        }
+        /* Style untuk Kontrol Leaflet dan Legend */
+        .leaflet-control-layers-expanded, .legend {
+            border-radius: 8px !important;
+            border: none !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        .legend {
+            background: white;
+            padding: 12px;
+            font-size: 13px;
+        }
+        .legend h4 {
+            margin: 0 0 10px 0;
+            font-size: 15px;
+            border-bottom: 2px solid #061d4c;
+            padding-bottom: 5px;
+            color: #333;
+        }
+        .legend-item {
+            margin: 6px 0;
+            display: flex;
+            align-items: center;
+        }
+        .line-icon {
+            display: inline-block;
+            width: 30px;
+            height: 3px;
+            margin-right: 8px;
+            border-radius: 2px;
+        }
+        .box-icon {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+        /* Style untuk Popup */
+        .leaflet-popup-content-wrapper {
+            border-radius: 8px;
+        }
+        .leaflet-popup-content h3 {
+            color: #061d4c; /* Warna sesuai header */
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .popup-table {
+            width: 100%;
+            font-size: 13px;
+        }
+        .popup-table td {
+            padding: 3px 0;
+        }
+        .popup-table strong {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">🗺️ WebGIS Pertanahan Kelurahan PacarKembang</div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // -------------------------
+        // Inisialisasi peta
+        // -------------------------
+        var map = L.map("map").setView([-7.259771, 112.766653], 14); // Zoom lebih dekat
+
+        // -------------------------
+        // Basemaps (Lebih Variatif)
+        // -------------------------
+        var osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19,
+        });
+
+        var satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 19,
+        });
+        
+        var topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            maxZoom: 17,
+            attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+        });
+
+        osm.addTo(map);
+
+        // -------------------------
+        // FUNGSI STYLING (Hanya Jalan Lokal)
+        // -------------------------
+        function getJalanColor() {
+            return "#f39c12"; // Warna Kuning/Oranye khas jalan lokal
+        }
+
+        function getJalanWeight() {
+            return 3;
+        }
+
+        // -------------------------
+        // VARIABEL GLOBAL & FETCH DATA
+        // -------------------------
+        var layerJalan;
+        var layerSungai;
+        var layerPersil;
+        var initialBounds = null; // Untuk menyimpan batas awal data
+
+        Promise.all([
+            fetch("data/geojson_pacarkembang/Jalan.geojson").then(r => r.json()),
+            fetch("data/geojson_pacarkembang/Sungai.geojson").then(r => r.json()),
+            fetch("data/geojson_pacarkembang/percil.geojson").then(r => r.json())
+        ])
+        .then(function([jalanData, sungaiData, persilData]) {
+            
+            // 1. LAYER PERSIL (Dulu di-load, agar tidak tertutup garis jalan/sungai)
+            layerPersil = L.geoJSON(persilData, {
+                style: {
+                    color: "#34495e", // Garis hijau cerah
+                    weight: 1,
+                    opacity: 1,
+                    fillColor: "#34495e", // Isi hijau sangat muda
+                    fillOpacity: 0.4,
+                },
+                onEachFeature: function (feature, layer) {
+                    var props = feature.properties;
+                    var luasString = props.LUAS ? String(props.LUAS) : '0';
+                    var cleanedLuas = luasString.replace(/ m²|m²|,/g, '').trim();
+                    var luasValue = parseFloat(cleanedLuas);
+                    var luasDisplay = isNaN(luasValue) ? (props.LUAS_1 || 'N/A') : luasValue.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                    var popupContent = `
+                        <h3><i class="fas fa-home"></i> Informasi Persil</h3>
+                        <table class="popup-table">
+                            <tr><td><strong>NIB</strong></td><td>: ${props.NIB || '-'}</td></tr>
+                            <tr><td><strong>No Hak</strong></td><td>: ${props.NO_HAK || '-'}</td></tr>
+                            <tr><td><strong>Luas</strong></td><td>: ${luasDisplay} m²</td></tr>
+                            <tr><td><strong>Kelurahan</strong></td><td>: ${props.KELURAHAN || '-'}</td></tr>
+                            <tr><td><strong>Kecamatan</strong></td><td>: ${props.KECAMATAN || '-'}</td></tr>
+                        </table>`;
+
+                    layer.bindPopup(popupContent);
+                    layer.bindTooltip(`Persil NIB: ${props.NIB || 'N/A'}`, { sticky: true });
+                    layer.on("mouseover", function () { this.setStyle({ weight: 3, opacity: 1, fillOpacity: 0.7, color: '#006400' }); });
+                    layer.on("mouseout", function () { layerPersil.resetStyle(this); });
+                },
+            }).addTo(map);
+
+            // 2. LAYER SUNGAI
+            layerSungai = L.geoJSON(sungaiData, {
+                style: {
+                    weight: 3,
+                    opacity: 1,
+                    color: "#3498db", // Biru Cerah
+                    lineCap: "round",
+                },
+                onEachFeature: function (feature, layer) {
+                    var props = feature.properties;
+                    var popupContent = `
+                        <div style="text-align:center;">
+                        <h3 style="color:#3498db;"><i class="fas fa-water"></i> ${props.REMARK || 'Sungai'}</h3>
+                        <p style="margin: 0;">FCODE: ${props.FCODE || '-'}</p>
+                        </div>`;
+                    layer.bindPopup(popupContent);
+                    layer.bindTooltip(props.REMARK || 'Sungai', { permanent: false });
+                },
+            }).addTo(map);
+            
+            // 3. LAYER JALAN LOKAL (Hanya menampilkan data Jalan Lokal)
+            var filteredJalanData = {
+                type: 'FeatureCollection',
+                features: jalanData.features.filter(f => f.properties.REMARK === 'Jalan Lokal')
+            };
+
+            layerJalan = L.geoJSON(filteredJalanData, {
+                style: function (feature) {
+                    return {
+                        color: getJalanColor(),
+                        weight: getJalanWeight(),
+                        opacity: 0.9,
+                        lineCap: "round",
+                        lineJoin: "round",
+                    };
+                },
+                onEachFeature: function (feature, layer) {
+                    var props = feature.properties;
+                    var panjang = props.SHAPE_Leng ? (props.SHAPE_Leng * 1000).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '-';
+
+                    var popupContent = `
+                        <h3><i class="fas fa-road"></i> Informasi Jalan Lokal</h3>
+                        <table class="popup-table">
+                            <tr><td><strong>Jenis</strong></td><td>: Jalan Lokal</td></tr>
+                            <tr><td><strong>Panjang</strong></td><td>: ${panjang} m</td></tr>
+                            <tr><td><strong>ID</strong></td><td>: ${props.FCODE || '-'}</td></tr>
+                        </table>`;
+                    layer.bindPopup(popupContent);
+                    layer.bindTooltip(`Jalan Lokal (${panjang} m)`, { sticky: true });
+                    layer.on("mouseover", function () { this.setStyle({ weight: getJalanWeight() + 2, opacity: 1 }); });
+                    layer.on("mouseout", function () { layerJalan.resetStyle(this); });
+                },
+            }).addTo(map);
+
+            // Simpan Batas Awal (gabungan semua layer)
+            initialBounds = L.featureGroup([layerPersil, layerSungai, layerJalan]).getBounds();
+            
+            // Zoom ke batas data
+            if (initialBounds.isValid()) {
+                map.fitBounds(initialBounds);
+            }
+
+            // 4. Layer Control
+            var baseMaps = {
+                "OpenStreetMap": osm,
+                "Satelit (Esri)": satellite,
+                "Topografi (OTM)": topo
+            };
+
+            var overlayMaps = {
+                "🏡 Persil Tanah": layerPersil,
+                "💧 Sungai": layerSungai,
+                "🛣 Jalan Lokal": layerJalan,
+            };
+
+            L.control.layers(baseMaps, overlayMaps, { collapsed: false, position: 'topright' }).addTo(map);
+            
+            // 5. Panggil Legend
+            legend.addTo(map);
+            map.on('overlayadd overlayremove', updateLegend);
+
+            // 6. Tambahkan Zoom Home Control
+            addZoomHomeControl(initialBounds);
+
+        })
+        .catch((error) => {
+            console.error("Error loading GeoJSON files:", error);
+            alert("Gagal memuat data. Pastikan semua file GeoJSON berada di direktori yang benar.");
+        });
+
+        // -------------------------
+        // LEGEND DINAMIS
+        // -------------------------
+
+        var legend = L.control({ position: "bottomright" });
+
+        legend.onAdd = function (map) {
+            var div = L.DomUtil.create("div", "legend");
+            updateLegendContent(div);
+            return div;
+        };
+
+        function updateLegendContent(div) {
+            var content = '<h4>Legenda Peta</h4>';
+            var activeLayers = [];
+
+            // Urutan disesuaikan
+            if (map.hasLayer(layerPersil)) {
+                activeLayers.push({ name: "Persil Tanah", color: "#34495e", fill: true, border: '#34495e', iconClass: 'fas fa-home', type: 'box' });
+            }
+            if (map.hasLayer(layerSungai)) {
+                activeLayers.push({ name: "Sungai", color: "#3498db", fill: false, iconClass: 'fas fa-water', type: 'line', weight: '3px' });
+            }
+            if (map.hasLayer(layerJalan)) {
+                activeLayers.push({ name: "Jalan Lokal", color: getJalanColor(), fill: false, iconClass: 'fas fa-road', type: 'line', weight: '3px' });
+            }
+
+            if (activeLayers.length === 0) {
+                 content += '<p>Pilih layer di kontrol lapisan.</p>';
+            } else {
+                activeLayers.forEach(item => {
+                    if (item.type === 'line') {
+                        content += `
+                            <div class="legend-item">
+                                <span class="line-icon" style="background-color: ${item.color}; height: ${item.weight};"></span>
+                                <span><i class="${item.iconClass}"></i> ${item.name}</span>
+                            </div>`;
+                    } else if (item.type === 'box') {
+                        content += `
+                            <div class="legend-item">
+                                <span class="box-icon" style="background-color: ${item.color}; border: 1.5px solid ${item.border};"></span>
+                                <span><i class="${item.iconClass}"></i> ${item.name}</span>
+                            </div>`;
+                    }
+                });
+            }
+            div.innerHTML = content;
+        }
+
+        function updateLegend() {
+            var div = legend.getContainer();
+            if (div) {
+                updateLegendContent(div);
+            }
+        }
+        
+        // -------------------------
+        // KONTROL TAMBAHAN
+        // -------------------------
+
+        // Scale Bar
+        L.control.scale({ position: "bottomleft", imperial: false }).addTo(map);
+        
+        // Zoom Home Control
+        function addZoomHomeControl(bounds) {
+            var zoomHome = L.Control.extend({
+                options: { position: "topleft" },
+                onAdd: function (map) {
+                    var container = L.DomUtil.create("div", "leaflet-bar leaflet-control");
+                    var button = L.DomUtil.create("a", "", container);
+                    button.innerHTML = '<i class="fas fa-home"></i>';
+                    button.href = "#";
+                    button.title = "Zoom ke batas data awal";
+                    button.style.fontSize = "16px";
+                    button.style.width = "30px";
+                    button.style.height = "30px";
+                    button.style.lineHeight = "30px";
+                    button.style.textAlign = "center";
+                    button.style.textDecoration = "none";
+                    button.style.color = "#333";
+                    button.style.paddingTop = "2px";
+
+                    L.DomEvent.on(button, "click", function (e) {
+                        L.DomEvent.preventDefault(e);
+                        if (bounds && bounds.isValid()) {
+                            map.fitBounds(bounds);
+                        } else {
+                             map.setView([-7.259771, 112.766653], 14); // Default view
+                        }
+                    });
+
+                    return container;
+                }
+            });
+            new zoomHome().addTo(map);
+        }
+
+    </script>
+</body>
+</html>
